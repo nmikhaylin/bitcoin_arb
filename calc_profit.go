@@ -13,16 +13,20 @@ var kTestAlgoInfo = []byte(`{"Success":true,"Message":"1,000 api calls remaining
 
 var myClient = &http.Client{Timeout: 10 * time.Second}
 
-var kTradedAlgos = map[string]bool{
-  "X11": true,
-  "SHA-256": true,
-  "Scrypt": true,
-  "EtHash": true,
+var kTradedAlgoIdMap = map[string]int{
+  "Scrypt": 0,
+  "SHA-256": 1,
+  "X11": 3,
+  "EtHash": 20, // DaggerHashimoto
 }
+
+var current_bitcoin_price float32 = 0.0
 
 const kApiKey string = "20aeeaae2f8341d2842ef67af9ab44dd"
 const kApiKeyInfoEndpoint string = "http://www.coinwarz.com/v1/api/apikeyinfo"
 const kProfitabilityEndpoint string = "http://www.coinwarz.com/v1/api/profitability/"
+const kNiceHashEndPoint string = "https://www.nicehash.com/api"
+
 const kSupportedAlgos string = "all"
 const kMinVolumeInBTC float32 = 20.0
 
@@ -36,25 +40,6 @@ type ApiKeyInfo struct {
     DailyUsageLimit int `json:"DailyUsageLimit"`
     DailyUsageRemaining int `json:"DailyUsageRemaining"`
   } `json:"Data"`
-}
-
-type CoinData struct {
-    CoinName string `json:"CoinName"`
-    CoinTag string `json:"CoinTag"`
-    Algorithm string `json:"Algorithm"`
-    Difficulty float32 `json:"Difficulty"`
-    BlockReward float32 `json:"BlockReward"`
-    BlockCount int `json:"BlockCount"`
-    ProfitRatio float32 `json:"ProfitRatio"`
-    ExchangeVolume float32 `json:"ExchangeVolume"`
-    ExchangeRate float32 `json:"ExchangeRate"`
-    AvgProfitRatio float32 `json:"AvgProfitRatio"`
-}
-
-type MiningProfitability struct {
-  Success bool `json:"Success"`
-  Message string `json:"Message"`
-  Data []CoinData `json:"Data"`
 }
 
 func GetApiKeyInfo() (*ApiKeyInfo, error) { 
@@ -78,26 +63,25 @@ func GetApiKeyInfo() (*ApiKeyInfo, error) {
   return s, nil
 }
 
-func FilterLowVolume(profit *MiningProfitability) {
-  new_data := []CoinData{}
-  for _, v := range profit.Data {
-    if ((v.ExchangeVolume * v.ExchangeRate) > kMinVolumeInBTC) {
-      new_data = append(new_data, v)
-    }
-  }
-  profit.Data = new_data
+type CoinData struct {
+    CoinName string `json:"CoinName"`
+    CoinTag string `json:"CoinTag"`
+    Algorithm string `json:"Algorithm"`
+    HealthStatus string `json:"HealthStatus"`
+    Difficulty float32 `json:"Difficulty"`
+    BlockReward float32 `json:"BlockReward"`
+    BlockCount int `json:"BlockCount"`
+    ProfitRatio float32 `json:"ProfitRatio"`
+    ExchangeVolume float32 `json:"ExchangeVolume"`
+    ExchangeRate float32 `json:"ExchangeRate"`
+    AvgProfitRatio float32 `json:"AvgProfitRatio"`
 }
 
-func FilterAlgorithms(profit *MiningProfitability) {
-  new_data := []CoinData{}
-  for _, v := range profit.Data {
-    if _, pres := kTradedAlgos[v.Algorithm] ; pres {
-      new_data = append(new_data, v)
-    }
-  }
-  profit.Data = new_data
+type MiningProfitability struct {
+  Success bool `json:"Success"`
+  Message string `json:"Message"`
+  Data []CoinData `json:"Data"`
 }
-
 
 func GetProfitabilityInfo() ([]CoinData, error) {
   body := bytes.Replace(kTestAlgoInfo, []byte("NaN"), []byte("null"), -1)
@@ -123,19 +107,123 @@ func GetProfitabilityInfo() ([]CoinData, error) {
   if (err != nil) {
     return nil, err
   }
+  GetCurrentBitcoinPrice(profit)
+  FilterUnHealthy(profit)
   FilterLowVolume(profit)
   FilterAlgorithms(profit)
   return profit.Data, nil
 }
 
-func main() {
-  _, err := GetApiKeyInfo()
-  if (err != nil) {
-    panic(err)
+func GetCurrentBitcoinPrice(profit *MiningProfitability) {
+  for _, v := range profit.Data {
+    if v.CoinName == "Bitcoin" {
+      current_bitcoin_price = v.ExchangeRate
+      break
+    }
   }
+}
+
+func FilterLowVolume(profit *MiningProfitability) {
+  new_data := []CoinData{}
+  for _, v := range profit.Data {
+    if ((v.ExchangeVolume * v.ExchangeRate) > kMinVolumeInBTC) {
+      new_data = append(new_data, v)
+    }
+  }
+  profit.Data = new_data
+}
+
+func FilterUnHealthy(profit *MiningProfitability) {
+  new_data := []CoinData{}
+  for _, v := range profit.Data {
+    if v.HealthStatus == "Healthy" {
+      new_data = append(new_data, v)
+    }
+  }
+  profit.Data = new_data
+}
+
+
+func FilterAlgorithms(profit *MiningProfitability) {
+  new_data := []CoinData{}
+  for _, v := range profit.Data {
+    if _, pres := kTradedAlgoIdMap[v.Algorithm] ; pres {
+      new_data = append(new_data, v)
+    }
+  }
+  profit.Data = new_data
+}
+
+type AlgoMarket struct {
+  Algo string
+  Location int
+  Orders []NiceHashOrder
+}
+
+type NiceHashMarket struct {
+  AlgoMarkets []AlgoMarket
+}
+
+type NiceHashOrder struct {
+  LimitSpeed float32 `json:"limit_speed,string"`
+  Alive bool `json:"alive"`
+  Price float32 `json:"price,string"`
+  OrderId int `json:"id"`
+  OrderType int `json:"type"`
+  Algo int `json:"algo"`
+  Workers int `json:"workers"`
+  AcceptedSpeed float32 `json:"accepted_speed,string"`
+}
+
+type NiceHashMarketInfo struct {
+  Result struct {
+    Orders []NiceHashOrder `json:"orders"`
+  } `json:"result"`
+}
+
+func GetNiceHashMarket() (*NiceHashMarket, error) {
+  ret := new(NiceHashMarket)
+  algo_markets := []AlgoMarket{}
+  for name, id := range kTradedAlgoIdMap {
+    req, err := http.NewRequest("GET", kNiceHashEndPoint, nil)
+    if (err != nil) {
+      return nil, err
+    }
+    q := req.URL.Query()
+    q.Add("method", "orders.get")
+    q.Add("algo", fmt.Sprintf("%d", id))
+    // Only US currently.
+    q.Add("location", "1")
+    req.URL.RawQuery = q.Encode()
+    resp, err := myClient.Get(req.URL.String())
+    if (err != nil) {
+      return nil, err
+    }
+    body, err := ioutil.ReadAll(resp.Body)
+    var info = new(NiceHashMarketInfo)
+    err = json.Unmarshal(body[:], &info)
+    if (err != nil) {
+      return nil, err
+    }
+    algo_markets = append(
+      algo_markets, AlgoMarket{Algo:name, Location:1, 
+                               Orders:info.Result.Orders[:]})
+  }
+  ret.AlgoMarkets = algo_markets
+  return ret, nil
+}
+
+func main() {
   profit, err := GetProfitabilityInfo()
   if (err != nil) {
     panic(err)
   }
   fmt.Printf("%+v\n", profit)
+  fmt.Printf("Current Bitcoin Price: %f\n", current_bitcoin_price)
+  nice_hash_market, err := GetNiceHashMarket()
+  if (err != nil) {
+    panic(err)
+  }
+  fmt.Printf("%+v\n", nice_hash_market)
+
 }
