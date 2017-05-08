@@ -225,5 +225,4 @@ func main() {
     panic(err)
   }
   fmt.Printf("%+v\n", nice_hash_market)
-
 }
