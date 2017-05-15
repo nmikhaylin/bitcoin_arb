@@ -25,6 +25,22 @@ var kTradedAlgoInfoMap = map[string]AlgoInfo{
   "EtHash": {20, 1e3}, // DaggerHashimoto
 }
 
+var kCoinScaling = map[string]float32 {
+  "Novacoin": 36584613.011,
+  "DigiByte": 36584613.011,
+  //  "Gulden": 31227042.000000,
+  // "Belacoin": 32117838.000000,
+  "GameCredits": 36584613.011,
+  "Ethereum": 156362570005334000.00,
+  "Dash": 36584613.011,
+  "DNotes": 36584613.011,
+  "Litecoin": 36584613.011,
+  // "Bitcoin": 22972243968.000000,
+  // "Crown": 83304002879488.000000,
+  // "Viacoin": 7561455104.000000,
+  // "Namecoin": 8950542193655808.000000,
+}
+
 var CurrentBitcoinPrice float32 = 0.0
 
 const kApiKey string = "20aeeaae2f8341d2842ef67af9ab44dd"
@@ -105,8 +121,6 @@ func GetProfitabilityInfo(rates map[string]MarketRate) ([]CoinData, error) {
     q.Add("apikey", kApiKey)
     // q.Add("algo", "all")
     q.Add("algo", kSupportedAlgos)
-    fmt.Printf("%f", 1.0 / rates["SHA-256"].Rate *
-        kTradedAlgoInfoMap["SHA-256"].UnitMultiplier)
     q.Add("sha256HashRate", fmt.Sprintf(
         "%f", 1.0 / rates["SHA-256"].Rate *
         kTradedAlgoInfoMap["SHA-256"].UnitMultiplier))
@@ -140,6 +154,8 @@ func GetProfitabilityInfo(rates map[string]MarketRate) ([]CoinData, error) {
   FilterUnHealthy(profit)
   FilterLowVolume(profit)
   FilterAlgorithms(profit)
+  FilterSupportedCoins(profit)
+  CalculateProfitability(profit, rates)
   return profit.Data, nil
 }
 
@@ -147,6 +163,7 @@ func GetCurrentBitcoinPrice(profit *MiningProfitability) {
   for _, v := range profit.Data {
     if v.CoinName == "Bitcoin" {
       CurrentBitcoinPrice = v.ExchangeRate
+      fmt.Printf("CurrentBitcoinPrice: %f\n", CurrentBitcoinPrice)
       break
     }
   }
@@ -177,6 +194,29 @@ func FilterAlgorithms(profit *MiningProfitability) {
   new_data := []CoinData{}
   for _, v := range profit.Data {
     if _, pres := kTradedAlgoInfoMap[v.Algorithm] ; pres {
+      new_data = append(new_data, v)
+    }
+  }
+  profit.Data = new_data
+}
+
+func FilterSupportedCoins(profit *MiningProfitability) {
+  new_data := []CoinData{}
+  for _, v := range profit.Data {
+    if _, pres := kCoinScaling[v.CoinName] ; pres {
+      new_data = append(new_data, v)
+    }
+  }
+  profit.Data = new_data
+}
+
+// Assumes all coins have scaling.
+func CalculateProfitability(profit *MiningProfitability, rates map[string]MarketRate) {
+  new_data := []CoinData{}
+  for _, v := range profit.Data {
+    if scale, pres := kCoinScaling[v.CoinName] ; pres {
+      v.ProfitRatio = 1000 * (scale * v.BlockReward * v.ExchangeRate /
+          rates[v.Algorithm].Rate / CurrentBitcoinPrice / v.Difficulty)
       new_data = append(new_data, v)
     }
   }

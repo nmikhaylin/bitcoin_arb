@@ -43,7 +43,8 @@ func main() {
     panic(err)
   }
   for _, v := range profit {
-    fmt.Printf("%s: %f\n", v.CoinName, v.ProfitRatio)
+    fmt.Printf("Name:%s Profit:%f Difficulty:%f\n",
+        v.CoinName, v.ProfitRatio, v.Difficulty)
 
   }
 }
